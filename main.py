@@ -1,6 +1,6 @@
 import vakt
 from vakt import Guard
-from vakt.rules import Eq, Any, StartsWith, And, Greater, Less
+from vakt.rules import Eq, Any, StartsWith, And, Greater, Less, GreaterOrEqual
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, scoped_session
 from vakt.storage.sql import SQLStorage, migrations, model
@@ -35,7 +35,8 @@ def dated(upto: str, created_date: str):
     return datetime.now() - created_datetime < time_delta
 
 func_dict = {
-    'dated': dated
+    'dated': dated,
+    
 }
 
 def get_user_perms(user_id: str) -> set[str]:
@@ -51,7 +52,7 @@ def get_user_perms(user_id: str) -> set[str]:
     
     
 
-class PowerGuard(Guard):
+class NewGuard(Guard):
     @staticmethod
     def check_context_restriction(policy, inquiry):
         """
@@ -69,29 +70,31 @@ class PowerGuard(Guard):
                 return False
         
         # checks within inquiry
-        if isinstance(inquiry.subject, dict):
-            try:
-                user_id = inquiry.subject['user_id']
-                user_perms = get_user_perms(user_id)
-                print(user_perms)
-                action = inquiry.action
-                resource = inquiry.resource
-                perm = f'{resource}:{action}'
-                candidate_perm = []
-                for p in user_perms:
-                    if p.startswith(perm):
-                        candidate_perm.append(p)
-                print(candidate_perm)
-                return_val = len(candidate_perm) > 0
-                for i in range(len(candidate_perm)):
-                    perm_args = candidate_perm[i].split('|')
-                    if len(perm_args) > 1:
-                        funcstring, args = perm_args[1].split('_')
-                        print(inquiry.context['start_date'])
-                        return_val = return_val and func_dict[funcstring](args, inquiry.context['start_date'])
-                return return_val
-            except:
-                print('fail')
+        # if isinstance(inquiry.subject, dict):
+        try:
+            user_id = inquiry.subject['user_id']
+            user_permissions = get_user_perms(user_id)
+            print(user_permissions)
+            target_permission = f'{inquiry.resource["resource_group"]}:{inquiry.action}'
+            relevant_permissions = []
+            for p in user_permissions:
+                if p.startswith(target_permission):
+                    relevant_permissions.append(p)
+            print(relevant_permissions)
+            # if there are no relevant_permissions, deny because the user cannot execute
+            # the action on this resource
+            if len(relevant_permissions) > 0: return False
+            return_val = True
+            for _, relevant_permission in enumerate(relevant_permissions):
+                permission_components = relevant_permission.split('|')
+                # if there are conditions to this permission
+                if len(permission_components) > 1:
+                    func_string, func_args = permission_components[1].split('_')
+                    print(inquiry.context['start_date'])
+                    return_val = return_val and func_dict[func_string](func_args, inquiry.context['start_date'])
+            return return_val
+        except:
+            print('fail')
         #for key, value in inquiry.context.items():
             
         
@@ -105,7 +108,7 @@ comment_policy = vakt.Policy(
     34234,
     actions=[Eq('comment')],
     resources=[StartsWith('bloq/post', ci=True)],
-    subjects=[{'user_id': Any()}],
+    subjects=[{'user_id': Any(), 'min_user_role': GreaterOrEqual('Dev')}],
     effect=vakt.ALLOW_ACCESS,
     context={},
     description="""
@@ -134,7 +137,7 @@ storage = SQLStorage(scoped_session=scoped_session(sessionmaker(bind=engine)))
 migrationset = migrations.SQLMigrationSet(storage)
 migrationset.up()
 # storage.add(comment_policy)
-guard = PowerGuard(storage, vakt.RulesChecker())
+guard = NewGuard(storage, vakt.RulesChecker())
 
 inq = vakt.Inquiry(action='fork',
                    resource='repos/google/tensorflow',
@@ -145,7 +148,7 @@ inq = vakt.Inquiry(action='fork',
 comment_inq = vakt.Inquiry(action='comment',
                            resource='bloq/post',
                            subject={'user_id': 'zixi'},
-                           context={'start_date': '12/01/2022'})
+                           context={'start_date': '12/07/2022'})
 assert guard.is_allowed(comment_inq)
 
 # print(get_user_perms('ly'))
